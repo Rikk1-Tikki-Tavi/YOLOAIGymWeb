@@ -1,0 +1,63 @@
+/* ── Reset ───────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Design tokens ───────────────────────────────────────────────────────── */
+:root {
+  --bg:          #080c12;
+  --bg-panel:    #0d1420;
+  --bg-card:     #111825;
+  --border:      #1e2d42;
+  --border-glow: #1e3a5f;
+
+  --good:        #00e87a;
+  --good-dim:    #00703b;
+  --info:        #3d9eff;
+  --info-dim:    #1a4a80;
+  --warn:        #ffb800;
+  --warn-dim:    #7a5800;
+  --error:       #ff3b3b;
+  --error-dim:   #7a1a1a;
+  --neutral:     #5a7080;
+  --neutral-dim: #2a3840;
+
+  --text:        #c8d8e8;
+  --text-dim:    #4a6070;
+  --text-bright: #e8f4ff;
+
+  --font-ui:     'Exo 2', sans-serif;
+  --font-mono:   'Share Tech Mono', monospace;
+
+  --radius:      6px;
+  --radius-lg:   12px;
+}
+
+/* ── Base ────────────────────────────────────────────────────────────────── */
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── Scan-line grain overlay ─────────────────────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.05) 2px,
+    rgba(0,0,0,0.05) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
