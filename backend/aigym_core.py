@@ -117,7 +117,7 @@ from ultralytics import YOLO
 SMOOTH_WINDOW    = 4
 CONFIRM_FRAMES   = 6    # EvidenceGate: frames needed to confirm a var class
 CLEAR_FRAMES     = 3    # EvidenceGate: frames needed to confirm correct form
-START_COUNTDOWN_SEC = 7
+START_COUNTDOWN_SEC = 5
 KP_CONF_LIVE     = 0.30
 KP_CONF_GHOST    = 0.20
 MAX_GHOST_FRAMES = 10
@@ -404,6 +404,22 @@ def draw_arc(frame,a,b,c,color,label):
 def check_pushup(pts, conf, state):
     hl, lines, arcs = {}, [], []
 
+    # Setup gate: require horizontal body + full body visible before scoring.
+    if not state.get("setup_ready", False):
+        if vis(pts, conf, 5, 6, 11, 12, 15, 16):
+            sh_m  = midpt(pts[5], pts[6])
+            hip_m = midpt(pts[11], pts[12])
+            if vertical_angle(sh_m, hip_m) >= 40:
+                state["setup_ready"] = True
+            else:
+                state["primary_angle"] = None
+                return (_assessment(None, ("Lie down horizontally to begin", "info"), "setup_pending"),
+                        hl, lines, arcs)
+        else:
+            state["primary_angle"] = None
+            return (_assessment(None, ("Get into push-up position — full body must be visible", "info"), "setup_pending"),
+                    hl, lines, arcs)
+
     lc=arm_conf(pts,conf,5,7,9); rc=arm_conf(pts,conf,6,8,10)
     if lc==0 and rc==0:
         state["primary_angle"] = None
@@ -440,10 +456,10 @@ def check_pushup(pts, conf, state):
         ank_m = midpt(pts[15],pts[16])
         dev   = state["sm"]["align"].update(signed_deviation(sh_m,hip_m,ank_m))
 
-        if dev > 20:
+        if dev > 15:
             dominant_tag = "sag"
             align_cue    = ("Engage core - hips sagging!","error")
-        elif dev < -15:
+        elif dev < -25:
             dominant_tag = "pike"
             align_cue    = ("Lower hips - raised too high!","error")
         elif abs(dev) > 10:
@@ -488,6 +504,19 @@ def check_pushup(pts, conf, state):
 def check_squat(pts, conf, state):
     hl, lines, arcs = {}, [], []
 
+    # Setup gate: knee > 150° AND torso is upright (< 30° from vertical).
+    # The torso check prevents lying down with extended legs from passing.
+    if not state.get("setup_ready", False):
+        knee_ok  = vis(pts, conf, 12, 14, 16) and angle_at_b(pts[12], pts[14], pts[16]) > 150
+        torso_ok = (not vis(pts, conf, 6, 12)
+                    or vertical_angle(pts[6], pts[12]) < 30)
+        if knee_ok and torso_ok:
+            state["setup_ready"] = True
+        else:
+            state["primary_angle"] = None
+            return (_assessment(None, ("Stand upright facing sideways to begin", "info"), "setup_pending"),
+                    hl, lines, arcs)
+
     if not vis(pts,conf,12,14,16):
         state["primary_angle"] = None
         return _assessment(None, ("Leg keypoints not visible - face sideways","neutral"), None), hl, lines, arcs
@@ -517,58 +546,20 @@ def check_squat(pts, conf, state):
     else:
         state["sm"]["lean"].reset()
 
-    # ── Knee depth detection ─────────────────────────────────────────────────
-    # Behaviour the user sees:
-    #   • Descending through 90-120°  → neutral "keep lowering" (never flag here)
-    #   • Stopped / hovering in 90-120° without reaching good depth
-    #                                 → red warning after DEPTH_DWELL_FRAMES
-    #   • Ascending from insufficient depth → red immediately (rep classification)
-    #   • ≤ 90° (good depth)          → green
-    #
-    # Two complementary signals drive depth_tag:
-    #   1. DWELL  – frame count in 90-120° while NOT actively going deeper and
-    #               NOT having already reached good depth this rep.
-    #   2. ASCENT – phase=="up" with min_angle_this_rep > 95° (never reached
-    #               good depth). Threshold 95° absorbs ~4° of smoother + MoveNet
-    #               noise so a raw-90° squat does not false-positive.
-    # Both reset cleanly between reps via min_angle_this_rep (reset in update_reps).
-
-    DEPTH_WARN_DWELL = 12   # ~0.6 s at 20 fps before showing the warning
-
-    # Velocity check: is the angle still falling fast enough to count as "descending"?
-    _prev_ka = state.get("_depth_ka_prev", ka)
-    state["_depth_ka_prev"] = ka
-    # Threshold 0.5° so that the typical 1°/frame smoothed descent triggers
-    # going_deeper=True (threshold 1.0 was exactly at the boundary and failed).
-    going_deeper = ka < _prev_ka - 0.5
-
-    # Did this rep ever reach good depth?  (min_angle resets to 999 between reps)
-    already_reached_depth = state.get("min_angle_this_rep", 999) <= 95
-
-    # Dwell counter — counts frames hovering in the insufficient-depth zone
-    if 90 < ka <= 120 and not going_deeper and not already_reached_depth:
-        state["depth_dwell"] = state.get("depth_dwell", 0) + 1
-    else:
-        state["depth_dwell"] = 0
-
+    # Knee depth cue — depth error requires phase=="down" so it never fires
+    # during the rising phase (which would wrongly flag a correct deep squat).
+    # Good-depth ceiling raised to 90° so the 85-90° boundary doesn't cause
+    # false positives when MoveNet reads slightly above 85° at proper depth.
     depth_tag = None
     if ka >= 155:
-        state["depth_dwell"] = 0
         knee_cue = ("Standing - begin your descent","info")
+    elif 60 <= ka <= 90:
+        knee_cue = (f"Good depth ({ka:.0f}d) - drive through heels!","good")
     elif ka < 60:
         knee_cue = ("Too deep - come up slightly","error")
-    elif ka <= 90:
-        state["depth_dwell"] = 0          # reached good depth — clear the counter
-        state["rep_peak_var"] = None      # cancel any dwell-triggered var; user reached good depth
-        knee_cue = (f"Good depth ({ka:.0f}d) - drive through heels!","good")
-    elif 90 < ka <= 120:
-        dwell          = state.get("depth_dwell", 0)
-        ascending_shallow = phase == "up" and not already_reached_depth
-        if ascending_shallow or dwell >= DEPTH_WARN_DWELL:
-            depth_tag = "depth"
-            knee_cue  = (f"Go deeper - {ka:.0f}d above target","warning")
-        else:
-            knee_cue = (f"Knee: {ka:.0f}d - keep lowering","info")
+    elif ka > 90 and phase == "down":
+        depth_tag = "depth"
+        knee_cue  = (f"Go deeper - {ka:.0f}d above target","warning")
     else:
         knee_cue = (f"Knee: {ka:.0f}d - keep lowering","info")
 
@@ -632,19 +623,19 @@ def check_lunge(pts, conf, state):
     # shin length so it scales with how big the user appears on screen.
     KNEE_PAST_RATIO          = 0.05   # fire error when knee_lead < -0.05
     KNEE_WARN_RATIO          = 0.12   # warning zone when knee_lead < +0.12
-    KNEE_OVER_CONFIRM_FRAMES = 3
+    KNEE_OVER_CONFIRM_FRAMES = 6
     KNEE_CHECK_MAX_ANGLE     = 130    # only run knee-over check while front_ka <= this
-    KNEE_OVER_ANGLE_DEEP     = 55      # safety floor only; correct lunge depth (~75-125°) must not fire
+    KNEE_OVER_ANGLE_DEEP     = 50      # safety floor only; correct lunge depth (~75-125°) must not fire
 
-    # var2 — wide step (rear knee can't bend because step is too long).
-    # Latch-based: fires when the rear knee stays near-straight (>130°) while
-    # the front knee is already committed to the lunge (front_ka <= 120°).
-    # A correct lunge has the rear knee bending toward ~90°; a wide step keeps
-    # it near-straight because the foot is placed too far back.
-    WIDE_STEP_LATCH_ANGLE  = 130   # rear knee above this = too straight = wide step
-    WIDE_STEP_LATCH_FRAMES = 5     # consecutive frames needed to latch (~0.33s at 30fps)
-    WIDE_STEP_GATE_DEG     = 100   # only count toward latch when front knee is committed
-    WIDE_STEP_RELEASE_DEG  = 80   # if rear knee bends below this, latch releases
+    # var2 — wide step (step too far forward: front knee forced very deep,
+    # rear knee stays relatively high, producing a large front-rear asymmetry).
+    # Detection: (rear_ka - front_ka) > WIDE_STEP_ASYM_DEG for WIDE_STEP_LATCH_FRAMES frames.
+    # Reference measurements: correct form front~107/rear~110 (diff~3d);
+    #                         wide step   front~63 /rear~100 (diff~37d).
+    WIDE_STEP_ASYM_DEG     = 25    # rear-minus-front asymmetry that signals wide step
+    WIDE_STEP_LATCH_FRAMES = 10    # consecutive frames needed to latch (~0.33s at 30fps)
+    WIDE_STEP_GATE_DEG     = 110   # latch only counts when rear knee shows real lunge depth
+    WIDE_STEP_RELEASE_DEG  = 100   # if rear knee bends below this, latch releases immediately
 
     # var3 — torso forward lean.
     TORSO_LEAN_DEG           = 30     # lean above this triggers error
@@ -653,7 +644,7 @@ def check_lunge(pts, conf, state):
 
     # Activity gates.
     LUNGE_GATE_DEG           = 162    # gate opens when REAR knee is below this
-    STANDING_RESET_DEG       = 165    # reset counters when fully standing
+    STANDING_RESET_DEG       = 155    # reset counters when fully standing
     # ════════════════════════════════════════════════════════════════════════
 
     hl, lines, arcs = {}, [], []
@@ -667,7 +658,29 @@ def check_lunge(pts, conf, state):
         fh, fk, fa = 12, 14, 16        # right hip / knee / ankle = FRONT
         rh, rk, ra = 11, 13, 15        # left  hip / knee / ankle = REAR
 
-    # ── 2. EARLY EXIT — front leg must be visible to do anything ──────────
+    # ── 2. SETUP GATE — stand tall (rear knee > 150°) before lunge zone opens ─
+    # Torso must also be upright (< 30° from vertical) so lying down with
+    # extended legs cannot accidentally pass the knee angle check.
+    if not state.get("setup_ready", False):
+        stand_ka = None
+        if vis(pts, conf, rh, rk, ra):
+            stand_ka = angle_at_b(pts[rh], pts[rk], pts[ra])
+        elif vis(pts, conf, fh, fk, fa):
+            stand_ka = angle_at_b(pts[fh], pts[fk], pts[fa])
+        sh_mid  = (midpt(pts[5], pts[6])  if vis(pts, conf, 5, 6)
+                   else pts[5] if vis(pts, conf, 5) else pts[6] if vis(pts, conf, 6) else None)
+        hip_mid = (midpt(pts[11], pts[12]) if vis(pts, conf, 11, 12)
+                   else pts[11] if vis(pts, conf, 11) else pts[12] if vis(pts, conf, 12) else None)
+        torso_ok = (sh_mid is None or hip_mid is None
+                    or vertical_angle(sh_mid, hip_mid) < 30)
+        if stand_ka is not None and stand_ka > 150 and torso_ok:
+            state["setup_ready"] = True
+        else:
+            state["primary_angle"] = None
+            return (_assessment(None, ("Stand tall to begin — step forward when ready", "info"), "setup_pending"),
+                    hl, lines, arcs)
+
+    # ── 3. EARLY EXIT — front leg must be visible to do anything ──────────
     if not vis(pts, conf, fh, fk, fa):
         state["primary_angle"] = None
         return (_assessment(None,
@@ -798,73 +811,62 @@ def check_lunge(pts, conf, state):
         state["sm"]["knee_toe"].reset()
 
     # ════════════════════════════════════════════════════════════════════════
-    # 7. VAR2 — WIDE STEP (latch-based, rear leg only)
+    # 7. VAR2 — WIDE STEP (latch-based, asymmetry signal)
     #
     # How the latch works:
-    #   • Compute wide_step_check_angle: rear_ka when available, else front_ka.
-    #     This fallback prevents dropped frames (rear_ka=None due to occlusion)
-    #     from stalling the counter — a genuine wide step makes both knees
-    #     relatively straight, so either angle exceeds the threshold.
-    #   • While in_lunge_zone, count consecutive frames where
-    #     wide_step_check_angle > WIDE_STEP_LATCH_ANGLE (130°).
-    #   • After WIDE_STEP_LATCH_FRAMES (5) such frames, set the latch True.
-    #   • Once latched, step_wide stays True every frame until the user fully
-    #     stands up — the counter is NOT decremented once the latch is set.
-    #   • The latch resets in section 4 when gate_ka > STANDING_RESET_DEG.
+    #   • Compute wide_step_asym = rear_ka - front_ka (requires both angles).
+    #     A large positive value means the front knee is far more bent than the
+    #     rear, which is the signature of a step that is too far forward.
+    #     Correct form: both knees similar (~107/110 → diff ~3d).
+    #     Wide step:    front very deep, rear high (~63/100 → diff ~37d).
+    #   • While in_lunge_zone and rear has shown commitment (rear_ka <= GATE),
+    #     count consecutive frames where wide_step_asym > WIDE_STEP_ASYM_DEG.
+    #   • After WIDE_STEP_LATCH_FRAMES such frames, latch locks True and stays
+    #     True until the user fully stands up (reset in section 4).
     # ════════════════════════════════════════════════════════════════════════
-    step_wide = False
-    wide_cue  = None
+    step_wide      = False
+    wide_cue       = None
+    wide_step_asym = None
     if in_lunge_zone:
-        # Wide step is measured on the rear knee only — that is the leg that
-        # stays near-straight when the step is too long. The old code used
-        # max(front_ka, rear_ka), which was wrong: a correct lunge has
-        # front_ka ~85° and rear_ka ~92°, max = 92 > old threshold of 88,
-        # causing false positives on every correct rep.
-        wide_step_angle = rear_ka   # None if rear leg not visible this frame
-
         # Draw rear-leg arc only when its keypoints are actually detected.
         if rear_ka is not None:
             arcs.append((pts[rh], pts[rk], pts[ra],
                          SEV["info"], f"{rear_ka:.0f}d"))
 
-        if wide_step_angle is not None and not state.get("wide_step_latch", False):
-            # Gate: only count toward the latch once the FRONT knee has shown
-            # real lunge commitment (front_ka <= WIDE_STEP_GATE_DEG = 120°).
-            # This proves the user is genuinely in a lunge, not just mid-step.
-            # Previously gated on rear_ka <= 100, which was True for correct
-            # lunges (rear bends to ~92°) and False for wide steps (rear ~140°)
-            # — the exact opposite of the intended behaviour.
-            committed = front_ka is not None and front_ka <= WIDE_STEP_GATE_DEG
+        # Asymmetry requires both knees visible this frame.
+        if rear_ka is not None and front_ka is not None:
+            wide_step_asym = rear_ka - front_ka
 
-            if wide_step_angle > WIDE_STEP_LATCH_ANGLE and committed:
-                # Knee(s) still too straight AND user committed: increment toward latch
+        if wide_step_asym is not None and not state.get("wide_step_latch", False):
+            # Gate: only count once rear knee shows real lunge depth.
+            # Prevents false latches during the initial forward step before
+            # either knee has committed to the lunge position.
+            committed = rear_ka <= WIDE_STEP_GATE_DEG
+
+            if wide_step_asym > WIDE_STEP_ASYM_DEG and committed:
                 state["lunge_rear_err_frames"] = state.get("lunge_rear_err_frames", 0) + 1
                 if state["lunge_rear_err_frames"] >= WIDE_STEP_LATCH_FRAMES:
                     state["wide_step_latch"] = True
-                    # Only mark hit_down if the primary angle (rear knee) has
-                    # descended below the up-threshold. Guards against counting
-                    # a rep before any down-up cycle has occurred (e.g. latch
-                    # fires while user is still standing).
+                    # Only mark hit_down once a real down-up cycle has started.
                     up_thresh = state["up_angle"] - state["tolerance"]
                     if state.get("primary_angle", 180) < up_thresh:
                         state["hit_down"] = True
             else:
-                # Not yet committed, or both knees bending normally: bleed counter
                 state["lunge_rear_err_frames"] = max(
                     state.get("lunge_rear_err_frames", 0) - 1, 0)
 
+        _angle_str = f"{wide_step_asym:.0f}d" if wide_step_asym is not None else "---"
+
         if state.get("wide_step_latch", False):
-            # Latch is set — hold the error cue for the rest of the rep.
-            # hit_down is NOT touched here; it was set once when latch fired.
             step_wide = True
-            _angle_str = f"{wide_step_angle:.0f}d" if wide_step_angle is not None else "---"
-            wide_cue  = (f"Step too wide - knee {_angle_str}, "
-                         f"move foot back", "error")
+            _fstr = f"{front_ka:.0f}" if front_ka is not None else "?"
+            _rstr = f"{rear_ka:.0f}"  if rear_ka  is not None else "?"
+            wide_cue = (f"Step too wide - front {_fstr}d vs rear {_rstr}d, "
+                        f"move foot back", "error")
             hl[(rh, rk)] = SEV["error"]
             hl[(rk, ra)] = SEV["error"]
-        elif wide_step_angle is not None and state.get("lunge_rear_err_frames", 0) > 0:
-            # Counter is rising but latch not yet set — show warning
-            wide_cue  = (f"Step wide - knee {wide_step_angle:.0f}d", "warning")
+        elif wide_step_asym is not None and state.get("lunge_rear_err_frames", 0) > 0:
+            wide_cue = (f"Step wide - asymmetry {_angle_str}", "warning")
             hl[(rh, rk)] = SEV["warning"]
             hl[(rk, ra)] = SEV["warning"]
         else:
@@ -966,6 +968,14 @@ def check_plank(pts, conf, state):
     ank = midpt(pts[15],pts[16])
 
     torso_from_vertical = vertical_angle(sh, hip)
+
+    # One-time setup gate: wait for horizontal body before scoring starts.
+    if not state.get("setup_ready", False):
+        if torso_from_vertical >= 40:
+            state["setup_ready"] = True
+        else:
+            state["primary_angle"] = None
+            return _assessment(None, ("Get into plank position to begin", "info"), "setup_pending"), hl, lines, arcs
 
     # Ongoing horizontal check: if user stands up mid-session the timer stops.
     # Does NOT reset setup_ready so returning to plank resumes scoring.
@@ -1074,15 +1084,11 @@ EXERCISES = {
         # Priority in ev_tags: lean > depth (lean is higher injury risk)
         "ev_tags":     {"lean": "var2", "depth": "var1"},
         "var_names":   {1:"Insufficient Depth", 2:"Excessive Forward Lean"},
-        # Rep-completion check: if min knee angle never reached 95° this rep → var1
-        # Threshold 95 absorbs ~5° of smoother+MoveNet noise above the true 90° target.
-        "insuf_depth_threshold": 95,
-        "insuf_depth_var":       "var1",
     },
     "lunges": {
         "label":       "Lunges",
         "description": "Lower body - quads, hip flexors, glutes",
-        "up_angle": 175.0, "down_angle": 115.0, "tolerance": 15.0,
+        "up_angle": 175.0, "down_angle": 100.0, "tolerance": 15.0,
         "is_timed":    False,
         "checker":     check_lunge,
         "smooth_window": 3,
@@ -1128,7 +1134,6 @@ def make_state(ex):
         "min_angle_this_rep":   999.0,
         "insuf_flex_this_rep":  False,
         "insuf_depth_threshold": ex.get("insuf_depth_threshold", None),
-        "insuf_depth_var":       ex.get("insuf_depth_var", "var3"),
         "dominant_foot":        None,   # set by PoseSession from user selection
         # Lunge internal debounce counters
         "lunge_down_frames":       0,
@@ -1139,6 +1144,7 @@ def make_state(ex):
         "form_issues":          set(),
         "plank_floor_fail_frames": 0,
         # Push-up specific HUD gating/rep feedback helpers
+        "setup_ready":          False,
         "last_rep_cls":         None,
         "last_rep_time":        0.0,
     }
@@ -1197,13 +1203,12 @@ def update_reps(state, cls_key):
                 # Empty buffer
                 dominant = "neutral"
 
-            # Rep-completion insufficient-depth check (push-ups var3; squats var1)
-            # Each exercise declares insuf_depth_threshold and insuf_depth_var in its config.
+            # Rep-completion insufficient-depth check (push-ups var3)
             insuf_thresh = state.get("insuf_depth_threshold")
             if (dominant in ("neutral", "correct")
                     and insuf_thresh is not None
                     and state.get("min_angle_this_rep", 999) > insuf_thresh):
-                dominant = state.get("insuf_depth_var", "var3")
+                dominant = "var3"
                 state["insuf_flex_this_rep"] = True
             else:
                 state["insuf_flex_this_rep"] = False
@@ -1535,6 +1540,27 @@ def run(args):
                     and assessment.get("primary_angle") is None):
                 assessment["dominant_tag"] = "no_pose"
                 assessment["evidence_tag"] = "no_pose"
+
+            # Setup gate for rep-based exercises: keep bottom in Transitioning
+            # until the user has entered the down zone at least once this set.
+            if is_started and not ex.get("is_timed", False):
+                angle = assessment.get("primary_angle")
+                if (not state.get("setup_ready", False)
+                        and angle is not None
+                        and angle <= state["down_angle"] + state["tolerance"]):
+                    state["setup_ready"] = True
+                if not state.get("setup_ready", False) and assessment.get("dominant_tag") is None:
+                    assessment["dominant_tag"] = "setup_pending"
+                    assessment["evidence_tag"] = "setup_pending"
+                    assessment["motion_cue"] = ("Get into position and start your first rep","info")
+                elif (state.get("setup_ready", False)
+                      and assessment.get("dominant_tag") is None
+                      and angle is not None
+                      and angle >= state["up_angle"] - state["tolerance"]):
+                    # At start/top position, show transition rather than correct.
+                    assessment["dominant_tag"] = "setup_pending"
+                    assessment["evidence_tag"] = "setup_pending"
+                    assessment["motion_cue"] = ("Ready position - begin next rep","info")
 
             # ── EvidenceGate: converts dominant_tag → stable form class ──
             # This is the ONLY place form_class_key is assigned.
