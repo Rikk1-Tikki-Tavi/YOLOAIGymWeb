@@ -621,11 +621,11 @@ def check_lunge(pts, conf, state):
     # Measured as (knee.x - ankle.x) / shin_length. Positive = behind ankle
     # (correct), negative = past ankle (over toes). Margin is a fraction of
     # shin length so it scales with how big the user appears on screen.
-    KNEE_PAST_RATIO          = 0.05   # fire error when knee_lead < -0.05
-    KNEE_WARN_RATIO          = 0.12   # warning zone when knee_lead < +0.12
+    KNEE_PAST_RATIO          = 0.20   # fire error when knee is clearly past ankle (>20% of shin length)
+    KNEE_WARN_RATIO          = 0.30   # warning zone: knee within 30% of shin from ankle
     KNEE_OVER_CONFIRM_FRAMES = 6
-    KNEE_CHECK_MAX_ANGLE     = 110    # only run knee-over check while front_ka <= this
-    KNEE_OVER_ANGLE_DEEP     = 50      # safety floor only; correct lunge depth (~75-125°) must not fire
+    KNEE_CHECK_MAX_ANGLE     = 130    # only run knee-over check while front_ka <= this
+    KNEE_OVER_ANGLE_DEEP     = 50     # angle floor: front_ka < 50 always fires regardless of position
 
     # var2 — wide step (step too far forward: front knee forced very deep,
     # rear knee stays relatively high, producing a large front-rear asymmetry).
