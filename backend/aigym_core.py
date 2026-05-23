@@ -557,7 +557,7 @@ def check_squat(pts, conf, state):
         knee_cue = (f"Good depth ({ka:.0f}d) - drive through heels!","good")
     elif ka < 60:
         knee_cue = ("Too deep - come up slightly","error")
-    elif ka > 90 and phase == "down":
+    elif ka > 90 and phase == "down" and state.get("min_angle_this_rep", 999) > 90:
         depth_tag = "depth"
         knee_cue  = (f"Go deeper - {ka:.0f}d above target","warning")
     else:
@@ -624,8 +624,8 @@ def check_lunge(pts, conf, state):
     KNEE_PAST_RATIO          = 0.20   # fire error when knee is clearly past ankle (>20% of shin length)
     KNEE_WARN_RATIO          = 0.30   # warning zone: knee within 30% of shin from ankle
     KNEE_OVER_CONFIRM_FRAMES = 6
-    KNEE_CHECK_MAX_ANGLE     = 130    # only run knee-over check while front_ka <= this
-    KNEE_OVER_ANGLE_DEEP     = 50     # angle floor: front_ka < 50 always fires regardless of position
+    KNEE_CHECK_MAX_ANGLE     = 80    # only run knee-over check while front_ka <= this
+    KNEE_OVER_ANGLE_DEEP     = 55     # angle floor: front_ka < 50 always fires regardless of position
 
     # var2 — wide step (step too far forward: front knee forced very deep,
     # rear knee stays relatively high, producing a large front-rear asymmetry).
@@ -635,7 +635,7 @@ def check_lunge(pts, conf, state):
     WIDE_STEP_ASYM_DEG     = 25    # rear-minus-front asymmetry that signals wide step
     WIDE_STEP_LATCH_FRAMES = 6    # consecutive frames needed to latch (~0.33s at 30fps)
     WIDE_STEP_GATE_DEG     = 110   # latch only counts when rear knee shows real lunge depth
-    WIDE_STEP_RELEASE_DEG  = 100   # if rear knee bends below this, latch releases immediately
+    WIDE_STEP_RELEASE_DEG  = 90   # if rear knee bends below this, latch releases immediately
 
     # var3 — torso forward lean.
     TORSO_LEAN_DEG           = 30     # lean above this triggers error
@@ -1162,14 +1162,21 @@ def update_reps(state, cls_key):
     # Hip-sag signed_deviation decreases naturally as elbows bend (shoulder
     # moves lower, changing the sh-ank reference line), so EvidenceGate can
     # clear the var mid-rep even when hips are still sagging.
-    # pre_down_var is also cleared if the gate returns to "correct" before
-    # the user goes down — this prevents a sag rep from tainting the next rep
-    # when the user corrects their posture at the top between reps.
-    if state.get("exercise_name") == "pushups" and not state.get("hit_down"):
-        if cls_key in ("var1", "var2", "var3"):
-            state["pre_down_var"] = cls_key
-        elif cls_key == "correct":
-            state["pre_down_var"] = None
+    if (state.get("exercise_name") == "pushups"
+            and not state.get("hit_down")
+            and cls_key in ("var1", "var2", "var3")):
+        state["pre_down_var"] = cls_key
+
+    # Push-up only: if EvidenceGate confirms correct form during descent,
+    # clear rep_peak_var. Residual sag from the previous rep can re-confirm
+    # var1 at the top between reps (after ev_gate.reset()), setting rep_peak_var
+    # at the very start of the next descent. Since genuine sag is captured by
+    # pre_down_var and the buffer majority, rep_peak_var being cleared when
+    # form is good mid-descent does not lose the real classification.
+    if (state.get("exercise_name") == "pushups"
+            and state.get("hit_down")
+            and cls_key == "correct"):
+        state["rep_peak_var"] = None
 
     # All exercises: track the peak (worst) var confirmed at ANY point during
     # the active rep. Catches lunges where var1 is confirmed during the lunge
