@@ -1162,10 +1162,14 @@ def update_reps(state, cls_key):
     # Hip-sag signed_deviation decreases naturally as elbows bend (shoulder
     # moves lower, changing the sh-ank reference line), so EvidenceGate can
     # clear the var mid-rep even when hips are still sagging.
-    if (state.get("exercise_name") == "pushups"
-            and not state.get("hit_down")
-            and cls_key in ("var1", "var2", "var3")):
-        state["pre_down_var"] = cls_key
+    # pre_down_var is also cleared if the gate returns to "correct" before
+    # the user goes down — this prevents a sag rep from tainting the next rep
+    # when the user corrects their posture at the top between reps.
+    if state.get("exercise_name") == "pushups" and not state.get("hit_down"):
+        if cls_key in ("var1", "var2", "var3"):
+            state["pre_down_var"] = cls_key
+        elif cls_key == "correct":
+            state["pre_down_var"] = None
 
     # All exercises: track the peak (worst) var confirmed at ANY point during
     # the active rep. Catches lunges where var1 is confirmed during the lunge
