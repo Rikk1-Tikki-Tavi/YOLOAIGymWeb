@@ -624,7 +624,7 @@ def check_lunge(pts, conf, state):
     KNEE_PAST_RATIO          = 0.05   # fire error when knee_lead < -0.05
     KNEE_WARN_RATIO          = 0.12   # warning zone when knee_lead < +0.12
     KNEE_OVER_CONFIRM_FRAMES = 6
-    KNEE_CHECK_MAX_ANGLE     = 130    # only run knee-over check while front_ka <= this
+    KNEE_CHECK_MAX_ANGLE     = 110    # only run knee-over check while front_ka <= this
     KNEE_OVER_ANGLE_DEEP     = 50      # safety floor only; correct lunge depth (~75-125°) must not fire
 
     # var2 — wide step (step too far forward: front knee forced very deep,
@@ -633,7 +633,7 @@ def check_lunge(pts, conf, state):
     # Reference measurements: correct form front~107/rear~110 (diff~3d);
     #                         wide step   front~63 /rear~100 (diff~37d).
     WIDE_STEP_ASYM_DEG     = 25    # rear-minus-front asymmetry that signals wide step
-    WIDE_STEP_LATCH_FRAMES = 10    # consecutive frames needed to latch (~0.33s at 30fps)
+    WIDE_STEP_LATCH_FRAMES = 6    # consecutive frames needed to latch (~0.33s at 30fps)
     WIDE_STEP_GATE_DEG     = 110   # latch only counts when rear knee shows real lunge depth
     WIDE_STEP_RELEASE_DEG  = 100   # if rear knee bends below this, latch releases immediately
 
@@ -1088,7 +1088,7 @@ EXERCISES = {
     "lunges": {
         "label":       "Lunges",
         "description": "Lower body - quads, hip flexors, glutes",
-        "up_angle": 175.0, "down_angle": 100.0, "tolerance": 15.0,
+        "up_angle": 175.0, "down_angle": 85.0, "tolerance": 15.0,
         "is_timed":    False,
         "checker":     check_lunge,
         "smooth_window": 3,
