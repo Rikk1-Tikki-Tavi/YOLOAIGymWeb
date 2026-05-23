@@ -404,22 +404,6 @@ def draw_arc(frame,a,b,c,color,label):
 def check_pushup(pts, conf, state):
     hl, lines, arcs = {}, [], []
 
-    # Setup gate: require horizontal body + full body visible before scoring.
-    if not state.get("setup_ready", False):
-        if vis(pts, conf, 5, 6, 11, 12, 15, 16):
-            sh_m  = midpt(pts[5], pts[6])
-            hip_m = midpt(pts[11], pts[12])
-            if vertical_angle(sh_m, hip_m) >= 40:
-                state["setup_ready"] = True
-            else:
-                state["primary_angle"] = None
-                return (_assessment(None, ("Lie down horizontally to begin", "info"), "setup_pending"),
-                        hl, lines, arcs)
-        else:
-            state["primary_angle"] = None
-            return (_assessment(None, ("Get into push-up position — full body must be visible", "info"), "setup_pending"),
-                    hl, lines, arcs)
-
     lc=arm_conf(pts,conf,5,7,9); rc=arm_conf(pts,conf,6,8,10)
     if lc==0 and rc==0:
         state["primary_angle"] = None
@@ -456,10 +440,10 @@ def check_pushup(pts, conf, state):
         ank_m = midpt(pts[15],pts[16])
         dev   = state["sm"]["align"].update(signed_deviation(sh_m,hip_m,ank_m))
 
-        if dev > 15:
+        if dev > 15 and ea < 165:
             dominant_tag = "sag"
             align_cue    = ("Engage core - hips sagging!","error")
-        elif dev < -25:
+        elif dev < -25 and ea < 165:
             dominant_tag = "pike"
             align_cue    = ("Lower hips - raised too high!","error")
         elif abs(dev) > 10:
@@ -504,19 +488,6 @@ def check_pushup(pts, conf, state):
 def check_squat(pts, conf, state):
     hl, lines, arcs = {}, [], []
 
-    # Setup gate: knee > 150° AND torso is upright (< 30° from vertical).
-    # The torso check prevents lying down with extended legs from passing.
-    if not state.get("setup_ready", False):
-        knee_ok  = vis(pts, conf, 12, 14, 16) and angle_at_b(pts[12], pts[14], pts[16]) > 150
-        torso_ok = (not vis(pts, conf, 6, 12)
-                    or vertical_angle(pts[6], pts[12]) < 30)
-        if knee_ok and torso_ok:
-            state["setup_ready"] = True
-        else:
-            state["primary_angle"] = None
-            return (_assessment(None, ("Stand upright facing sideways to begin", "info"), "setup_pending"),
-                    hl, lines, arcs)
-
     if not vis(pts,conf,12,14,16):
         state["primary_angle"] = None
         return _assessment(None, ("Leg keypoints not visible - face sideways","neutral"), None), hl, lines, arcs
@@ -553,11 +524,11 @@ def check_squat(pts, conf, state):
     depth_tag = None
     if ka >= 155:
         knee_cue = ("Standing - begin your descent","info")
-    elif 60 <= ka <= 90:
+    elif 60 <= ka <= 80:
         knee_cue = (f"Good depth ({ka:.0f}d) - drive through heels!","good")
     elif ka < 60:
         knee_cue = ("Too deep - come up slightly","error")
-    elif ka > 90 and phase == "down" and state.get("min_angle_this_rep", 999) > 90:
+    elif ka > 80 and phase == "down" and state.get("min_angle_this_rep", 999) > 90:
         depth_tag = "depth"
         knee_cue  = (f"Go deeper - {ka:.0f}d above target","warning")
     else:
@@ -658,29 +629,7 @@ def check_lunge(pts, conf, state):
         fh, fk, fa = 12, 14, 16        # right hip / knee / ankle = FRONT
         rh, rk, ra = 11, 13, 15        # left  hip / knee / ankle = REAR
 
-    # ── 2. SETUP GATE — stand tall (rear knee > 150°) before lunge zone opens ─
-    # Torso must also be upright (< 30° from vertical) so lying down with
-    # extended legs cannot accidentally pass the knee angle check.
-    if not state.get("setup_ready", False):
-        stand_ka = None
-        if vis(pts, conf, rh, rk, ra):
-            stand_ka = angle_at_b(pts[rh], pts[rk], pts[ra])
-        elif vis(pts, conf, fh, fk, fa):
-            stand_ka = angle_at_b(pts[fh], pts[fk], pts[fa])
-        sh_mid  = (midpt(pts[5], pts[6])  if vis(pts, conf, 5, 6)
-                   else pts[5] if vis(pts, conf, 5) else pts[6] if vis(pts, conf, 6) else None)
-        hip_mid = (midpt(pts[11], pts[12]) if vis(pts, conf, 11, 12)
-                   else pts[11] if vis(pts, conf, 11) else pts[12] if vis(pts, conf, 12) else None)
-        torso_ok = (sh_mid is None or hip_mid is None
-                    or vertical_angle(sh_mid, hip_mid) < 30)
-        if stand_ka is not None and stand_ka > 150 and torso_ok:
-            state["setup_ready"] = True
-        else:
-            state["primary_angle"] = None
-            return (_assessment(None, ("Stand tall to begin — step forward when ready", "info"), "setup_pending"),
-                    hl, lines, arcs)
-
-    # ── 3. EARLY EXIT — front leg must be visible to do anything ──────────
+    # ── 2. EARLY EXIT — front leg must be visible to do anything ──────────
     if not vis(pts, conf, fh, fk, fa):
         state["primary_angle"] = None
         return (_assessment(None,
@@ -969,16 +918,7 @@ def check_plank(pts, conf, state):
 
     torso_from_vertical = vertical_angle(sh, hip)
 
-    # One-time setup gate: wait for horizontal body before scoring starts.
-    if not state.get("setup_ready", False):
-        if torso_from_vertical >= 40:
-            state["setup_ready"] = True
-        else:
-            state["primary_angle"] = None
-            return _assessment(None, ("Get into plank position to begin", "info"), "setup_pending"), hl, lines, arcs
-
     # Ongoing horizontal check: if user stands up mid-session the timer stops.
-    # Does NOT reset setup_ready so returning to plank resumes scoring.
     if torso_from_vertical < 30:
         state["primary_angle"] = None
         return _assessment(None, ("Return to plank position", "neutral"), "setup_pending"), hl, lines, arcs
@@ -1059,7 +999,7 @@ EXERCISES = {
     "pushups": {
         "label":       "Push-ups",
         "description": "Upper body - chest, shoulders, triceps",
-        "up_angle": 130.0, "down_angle": 110.0, "tolerance": 10.0,
+        "up_angle": 150.0, "down_angle": 110.0, "tolerance": 10.0,
         "is_timed":    False,
         "checker":     check_pushup,
         "smooth_window": SMOOTH_WINDOW,
@@ -1144,7 +1084,6 @@ def make_state(ex):
         "form_issues":          set(),
         "plank_floor_fail_frames": 0,
         # Push-up specific HUD gating/rep feedback helpers
-        "setup_ready":          False,
         "last_rep_cls":         None,
         "last_rep_time":        0.0,
     }
@@ -1165,8 +1104,12 @@ def update_reps(state, cls_key):
     if (state.get("exercise_name") == "pushups"
             and not state.get("hit_down")
             and cls_key in ("var1", "var2", "var3")):
-        state["pre_down_var"] = cls_key
-
+        # Prevent residual error from the previous rep from being captured
+        # as a pre-down var. Only record it if the last rep ended at least
+        # 0.5 seconds ago.
+        now = time.time()
+        if state.get("last_rep_time", 0) is None or (now - state.get("last_rep_time", 0)) > 0.5:
+            state["pre_down_var"] = cls_key
     # Push-up only: if EvidenceGate confirms correct form during descent,
     # clear rep_peak_var. Residual sag from the previous rep can re-confirm
     # var1 at the top between reps (after ev_gate.reset()), setting rep_peak_var
@@ -1224,6 +1167,13 @@ def update_reps(state, cls_key):
             else:
                 state["insuf_flex_this_rep"] = False
 
+            # Squat: override "Insufficient Depth" (var1) if the knee actually
+            # reached ≤ 90° at any point during the rep (i.e. good depth was hit).
+            if (dominant == "var1"
+                    and state.get("exercise_name") == "squats"
+                    and state.get("min_angle_this_rep", 999) <= 80):
+                dominant = "correct"
+
             state["rep_log"].append(dominant)
             state["reps"]       += 1
             state["last_rep_cls"]  = dominant
@@ -1232,6 +1182,8 @@ def update_reps(state, cls_key):
             state["down_cls_buf"].clear()
             state["ev_gate"].reset()
             state["min_angle_this_rep"] = 999.0
+            if state.get("exercise_name") == "pushups":
+                state["sm"]["align"].reset()
             state["pre_down_var"] = None   # reset for next rep
             state["rep_peak_var"] = None   # reset for next rep
         state["stage"] = "up"
@@ -1551,27 +1503,6 @@ def run(args):
                     and assessment.get("primary_angle") is None):
                 assessment["dominant_tag"] = "no_pose"
                 assessment["evidence_tag"] = "no_pose"
-
-            # Setup gate for rep-based exercises: keep bottom in Transitioning
-            # until the user has entered the down zone at least once this set.
-            if is_started and not ex.get("is_timed", False):
-                angle = assessment.get("primary_angle")
-                if (not state.get("setup_ready", False)
-                        and angle is not None
-                        and angle <= state["down_angle"] + state["tolerance"]):
-                    state["setup_ready"] = True
-                if not state.get("setup_ready", False) and assessment.get("dominant_tag") is None:
-                    assessment["dominant_tag"] = "setup_pending"
-                    assessment["evidence_tag"] = "setup_pending"
-                    assessment["motion_cue"] = ("Get into position and start your first rep","info")
-                elif (state.get("setup_ready", False)
-                      and assessment.get("dominant_tag") is None
-                      and angle is not None
-                      and angle >= state["up_angle"] - state["tolerance"]):
-                    # At start/top position, show transition rather than correct.
-                    assessment["dominant_tag"] = "setup_pending"
-                    assessment["evidence_tag"] = "setup_pending"
-                    assessment["motion_cue"] = ("Ready position - begin next rep","info")
 
             # ── EvidenceGate: converts dominant_tag → stable form class ──
             # This is the ONLY place form_class_key is assigned.
