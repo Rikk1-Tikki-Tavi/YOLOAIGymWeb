@@ -498,6 +498,15 @@ def check_squat(pts, conf, state):
     state["min_angle_this_rep"] = min(state.get("min_angle_this_rep",999), ka)
     phase = state.get("stage","up")
 
+    # Once the user has reached good depth this rep (min knee angle <= 75°),
+    # cancel any depth-flag confirmed during the descent. depth_tag may have
+    # fired for a few frames while passing through the 75-120° zone on the way
+    # to good depth, briefly setting rep_peak_var via EvidenceGate. Reaching
+    # good depth proves the rep was correct, so the flag is cleared.
+    if (state["min_angle_this_rep"] <= 75
+            and state.get("rep_peak_var") == "var1"):
+        state["rep_peak_var"] = None
+
     # Torso lean — checked first (injury priority)
     lean_tag = None
     torso_cue = None
@@ -519,16 +528,16 @@ def check_squat(pts, conf, state):
 
     # Knee depth cue — depth error requires phase=="down" so it never fires
     # during the rising phase (which would wrongly flag a correct deep squat).
-    # Good-depth ceiling raised to 90° so the 85-90° boundary doesn't cause
-    # false positives when MoveNet reads slightly above 85° at proper depth.
+    # Correct depth: 60 <= ka <= 75. Threshold 80 in the depth_tag gate is
+    # the upper bound + 5° noise margin (smoother + MoveNet jitter).
     depth_tag = None
     if ka >= 155:
         knee_cue = ("Standing - begin your descent","info")
-    elif 60 <= ka <= 80:
+    elif 60 <= ka <= 75:
         knee_cue = (f"Good depth ({ka:.0f}d) - drive through heels!","good")
     elif ka < 60:
         knee_cue = ("Too deep - come up slightly","error")
-    elif ka > 80 and phase == "down" and state.get("min_angle_this_rep", 999) > 90:
+    elif ka > 75 and phase == "down" and state.get("min_angle_this_rep", 999) > 80:
         depth_tag = "depth"
         knee_cue  = (f"Go deeper - {ka:.0f}d above target","warning")
     else:
@@ -595,7 +604,7 @@ def check_lunge(pts, conf, state):
     # because it was sensitive to camera angle and MoveNet x-coordinate noise.
     KNEE_OVER_CONFIRM_FRAMES = 6
     KNEE_CHECK_MAX_ANGLE     = 80     # only run knee-over check while front_ka <= this
-    KNEE_OVER_ANGLE_DEEP     = 70     # angle floor: front_ka < this fires var1
+    KNEE_OVER_ANGLE_DEEP     = 65     # angle floor: front_ka < this fires var1
 
     # var2 — wide step (step too far forward: front knee forced very deep,
     # rear knee stays relatively high, producing a large front-rear asymmetry).
@@ -993,6 +1002,12 @@ EXERCISES = {
         # Priority in ev_tags: lean > depth (lean is higher injury risk)
         "ev_tags":     {"lean": "var2", "depth": "var1"},
         "var_names":   {1:"Insufficient Depth", 2:"Excessive Forward Lean"},
+        # Rep-completion safety net: if min knee angle never reached 80°
+        # (upper bound of correct depth 75 + 5° noise), the rep is flagged
+        # as var1 at rep close. Catches fast-ascent reps where EvidenceGate
+        # may not confirm depth_tag in time.
+        "insuf_depth_threshold": 80,
+        "insuf_depth_var":       "var1",
     },
     "lunges": {
         "label":       "Lunges",
@@ -1140,7 +1155,7 @@ def update_reps(state, cls_key):
             # reached ≤ 90° at any point during the rep (i.e. good depth was hit).
             if (dominant == "var1"
                     and state.get("exercise_name") == "squats"
-                    and state.get("min_angle_this_rep", 999) <= 80):
+                    and state.get("min_angle_this_rep", 999) <= 75):
                 dominant = "correct"
 
             state["rep_log"].append(dominant)
