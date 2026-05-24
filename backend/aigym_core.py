@@ -443,7 +443,7 @@ def check_pushup(pts, conf, state):
         if dev > 15 and ea < 165:
             dominant_tag = "sag"
             align_cue    = ("Engage core - hips sagging!","error")
-        elif dev < -25 and ea < 165:
+        elif dev < -20 and ea < 165:
             dominant_tag = "pike"
             align_cue    = ("Lower hips - raised too high!","error")
         elif abs(dev) > 10:
@@ -588,23 +588,22 @@ def check_lunge(pts, conf, state):
     CORRECT_DEPTH_MIN   = 75
     CORRECT_DEPTH_MAX   = 125
 
-    # var1 — knee crosses past the front ankle.
-    # Measured as (knee.x - ankle.x) / shin_length. Positive = behind ankle
-    # (correct), negative = past ankle (over toes). Margin is a fraction of
-    # shin length so it scales with how big the user appears on screen.
-    KNEE_PAST_RATIO          = 0.20   # fire error when knee is clearly past ankle (>20% of shin length)
-    KNEE_WARN_RATIO          = 0.30   # warning zone: knee within 30% of shin from ankle
+    # var1 — front knee over toes. Detected purely from the front knee angle:
+    # if front_ka drops below KNEE_OVER_ANGLE_DEEP for KNEE_OVER_CONFIRM_FRAMES
+    # consecutive frames, the shin is angled far enough forward that the knee
+    # is past the foot. The positional (knee.x - ankle.x) check was removed
+    # because it was sensitive to camera angle and MoveNet x-coordinate noise.
     KNEE_OVER_CONFIRM_FRAMES = 6
-    KNEE_CHECK_MAX_ANGLE     = 80    # only run knee-over check while front_ka <= this
-    KNEE_OVER_ANGLE_DEEP     = 55     # angle floor: front_ka < 50 always fires regardless of position
+    KNEE_CHECK_MAX_ANGLE     = 80     # only run knee-over check while front_ka <= this
+    KNEE_OVER_ANGLE_DEEP     = 70     # angle floor: front_ka < this fires var1
 
     # var2 — wide step (step too far forward: front knee forced very deep,
     # rear knee stays relatively high, producing a large front-rear asymmetry).
     # Detection: (rear_ka - front_ka) > WIDE_STEP_ASYM_DEG for WIDE_STEP_LATCH_FRAMES frames.
     # Reference measurements: correct form front~107/rear~110 (diff~3d);
     #                         wide step   front~63 /rear~100 (diff~37d).
-    WIDE_STEP_ASYM_DEG     = 25    # rear-minus-front asymmetry that signals wide step
-    WIDE_STEP_LATCH_FRAMES = 6    # consecutive frames needed to latch (~0.33s at 30fps)
+    WIDE_STEP_ASYM_DEG     = 15    # rear-minus-front asymmetry that signals wide step
+    WIDE_STEP_LATCH_FRAMES = 4   # consecutive frames needed to latch (~0.33s at 30fps)
     WIDE_STEP_GATE_DEG     = 110   # latch only counts when rear knee shows real lunge depth
     WIDE_STEP_RELEASE_DEG  = 90   # if rear knee bends below this, latch releases immediately
 
@@ -702,62 +701,31 @@ def check_lunge(pts, conf, state):
     arcs.append((pts[fh], pts[fk], pts[fa], c, f"{front_ka:.0f}d"))
 
     # ════════════════════════════════════════════════════════════════════════
-    # 6. VAR1 — KNEE OVER TOES
-    # The mirrored backend image makes "forward" = smaller x for both lunges.
-    # So `knee.x - ankle.x` is positive when the knee is correctly behind the
-    # ankle, and negative once the knee crosses past it. Normalised by shin
-    # length so the margin is body-size independent.
+    # 6. VAR1 — KNEE OVER TOES (angle-only)
+    # If the front knee bends below KNEE_OVER_ANGLE_DEEP for
+    # KNEE_OVER_CONFIRM_FRAMES consecutive frames, the shin is past vertical
+    # and the knee is over the foot.
     # ════════════════════════════════════════════════════════════════════════
     knee_over = False
     shin_cue  = None
     if in_lunge_zone and front_ka <= KNEE_CHECK_MAX_ANGLE and vis(pts, conf, fk, fa):
-        shin_len = max(np.linalg.norm(
-            np.asarray(pts[fk], float) - np.asarray(pts[fa], float)
-        ), 10.0)
-        # Sign depends on which direction "forward" is in the MIRRORED backend image.
-        #
-        # Left lunge: user turns LEFT → right side faces camera → after mirror
-        #   flip, the left (front) foot appears on the RIGHT (larger x).
-        #   Correct form: ankle to the RIGHT of knee → ankle.x > knee.x.
-        #   Formula: (ankle.x - knee.x) / shin_len → positive when correct.
-        #
-        # Right lunge: user turns RIGHT → left side faces camera → after mirror
-        #   flip, the right (front) foot appears on the LEFT (smaller x).
-        #   Correct form: ankle to the LEFT of knee → knee.x > ankle.x.
-        #   Formula: (knee.x - ankle.x) / shin_len → positive when correct.
-        #
-        # In both cases: positive = knee behind ankle (OK), negative = knee
-        # past toes (var1). KNEE_PAST_RATIO threshold is identical for both.
-        if dominant_foot == "L":
-            knee_lead_raw = (pts[fa][0] - pts[fk][0]) / shin_len
-        else:
-            knee_lead_raw = (pts[fk][0] - pts[fa][0]) / shin_len
-        knee_lead     = state["sm"]["knee_toe"].update(knee_lead_raw)
-
-        if knee_lead < -KNEE_PAST_RATIO or front_ka < KNEE_OVER_ANGLE_DEEP:
+        if front_ka < KNEE_OVER_ANGLE_DEEP:
             state["lunge_knee_err_frames"] = state.get("lunge_knee_err_frames", 0) + 1
             if state["lunge_knee_err_frames"] >= KNEE_OVER_CONFIRM_FRAMES:
                 knee_over = True
-                shin_cue = ("Knee past toes - step wider", "error")
+                shin_cue = (f"Knee past toes ({front_ka:.0f}d) - step wider", "error")
                 hl[(fk, fa)] = SEV["error"]
             else:
-                shin_cue = ("Knee creeping forward", "warning")
+                shin_cue = (f"Knee creeping forward ({front_ka:.0f}d)", "warning")
                 hl[(fk, fa)] = SEV["warning"]
-        elif knee_lead < KNEE_WARN_RATIO:
-            state["lunge_knee_err_frames"] = max(
-                state.get("lunge_knee_err_frames", 0) - 1, 0)
-            shin_cue = ("Knee forward - shift weight back", "warning")
-            hl[(fk, fa)] = SEV["warning"]
         else:
             state["lunge_knee_err_frames"] = max(
                 state.get("lunge_knee_err_frames", 0) - 1, 0)
-            shin_cue = ("Knee position: good", "good")
+            shin_cue = (f"Knee position: good ({front_ka:.0f}d)", "good")
             hl[(fk, fa)] = SEV["good"]
         lines.append((pts[fa],
                       (pts[fa][0], pts[fk][1]),
                       SEV[shin_cue[1]], True))
-    else:
-        state["sm"]["knee_toe"].reset()
 
     # ════════════════════════════════════════════════════════════════════════
     # 7. VAR2 — WIDE STEP (latch-based, asymmetry signal)
@@ -873,12 +841,12 @@ def check_lunge(pts, conf, state):
     if torso_lean:
         dominant_tag = "torso_lean"
         motion_cue   = torso_cue
-    elif knee_over:
-        dominant_tag = "knee_over"
-        motion_cue   = shin_cue
     elif step_wide:
         dominant_tag = "step_wide"
         motion_cue   = wide_cue
+    elif knee_over:
+        dominant_tag = "knee_over"
+        motion_cue   = shin_cue
 
     else:
         dominant_tag = None
@@ -948,18 +916,19 @@ def check_plank(pts, conf, state):
 
     # Alignment — primary plank cue
     dominant_tag = None
-    if dev > 12:
-        dominant_tag = "hip_sag"
-        align_cue    = ("Lift hips - body too close to floor","error")
-    elif dev < -25:
-        dominant_tag = "hip_high"
-        align_cue    = ("Lower hips - raised too high","error")
-    elif dev > 8:
-        align_cue    = (f"Hips slightly low ({dev:+.0f}d) - lift a bit","warning")
-    elif dev < -18:
-        align_cue    = (f"Hips slightly high ({dev:+.0f}d) - lower a bit","warning")
-    else:
-        align_cue    = (f"Body alignment: straight OK ({dev:+.1f}d)","good")
+    if torso_from_vertical > 80:
+        if dev > 8:
+            dominant_tag = "hip_sag"
+            align_cue    = ("Lift hips - body too close to floor","error")
+        elif dev < -25:
+            dominant_tag = "hip_high"
+            align_cue    = ("Lower hips - raised too high","error")
+        elif dev > 8:
+            align_cue    = (f"Hips slightly low ({dev:+.0f}d) - lift a bit","warning")
+        elif dev < -18:
+            align_cue    = (f"Hips slightly high ({dev:+.0f}d) - lower a bit","warning")
+        else:
+            align_cue    = (f"Body alignment: straight OK ({dev:+.1f}d)","good")
 
     ca = SEV[align_cue[1]]
     for b in [(5,11),(6,12),(11,12),(11,13),(12,14),(13,15),(14,16)]: hl[b]=ca
@@ -1034,7 +1003,7 @@ EXERCISES = {
         "smooth_window": 3,
         "kp_buffer_size": 4,
         "max_ghost_frames": 3,
-        "smooth_keys": ["knee","knee_toe","rear_knee","lean"],
+        "smooth_keys": ["knee","rear_knee","lean"],
         "ev_tags":     {"knee_over": "var1", "step_wide": "var2", "torso_lean": "var3"},
         "var_names":   {1:"Front Knee Overextension", 2:"Wide Step", 3:"Torso Forward Lean"},
         "confirm_frames": 3,
