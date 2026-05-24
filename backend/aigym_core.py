@@ -498,12 +498,13 @@ def check_squat(pts, conf, state):
     state["min_angle_this_rep"] = min(state.get("min_angle_this_rep",999), ka)
     phase = state.get("stage","up")
 
-    # Once the user has reached good depth this rep (min knee angle <= 75°),
+    # Once the user has reached the noise boundary of good depth this rep
+    # (min knee angle <= 70°, i.e. correct upper bound 65 + 5° noise),
     # cancel any depth-flag confirmed during the descent. depth_tag may have
-    # fired for a few frames while passing through the 75-120° zone on the way
+    # fired for a few frames while passing through the 65-120° zone on the way
     # to good depth, briefly setting rep_peak_var via EvidenceGate. Reaching
     # good depth proves the rep was correct, so the flag is cleared.
-    if (state["min_angle_this_rep"] <= 75
+    if (state["min_angle_this_rep"] <= 70
             and state.get("rep_peak_var") == "var1"):
         state["rep_peak_var"] = None
 
@@ -528,16 +529,14 @@ def check_squat(pts, conf, state):
 
     # Knee depth cue — depth error requires phase=="down" so it never fires
     # during the rising phase (which would wrongly flag a correct deep squat).
-    # Correct depth: 60 <= ka <= 75. Threshold 80 in the depth_tag gate is
-    # the upper bound + 5° noise margin (smoother + MoveNet jitter).
+    # Correct depth: ka <= 65 (deeper is always better for squats). Threshold
+    # 70 in the depth_tag gate is 65 + 5° noise margin (smoother + MoveNet).
     depth_tag = None
     if ka >= 155:
         knee_cue = ("Standing - begin your descent","info")
-    elif 60 <= ka <= 75:
+    elif ka <= 65:
         knee_cue = (f"Good depth ({ka:.0f}d) - drive through heels!","good")
-    elif ka < 60:
-        knee_cue = ("Too deep - come up slightly","error")
-    elif ka > 75 and phase == "down" and state.get("min_angle_this_rep", 999) > 80:
+    elif ka > 65 and phase == "down" and state.get("min_angle_this_rep", 999) > 70:
         depth_tag = "depth"
         knee_cue  = (f"Go deeper - {ka:.0f}d above target","warning")
     else:
@@ -1002,11 +1001,11 @@ EXERCISES = {
         # Priority in ev_tags: lean > depth (lean is higher injury risk)
         "ev_tags":     {"lean": "var2", "depth": "var1"},
         "var_names":   {1:"Insufficient Depth", 2:"Excessive Forward Lean"},
-        # Rep-completion safety net: if min knee angle never reached 80°
-        # (upper bound of correct depth 75 + 5° noise), the rep is flagged
+        # Rep-completion safety net: if min knee angle never reached 70°
+        # (upper bound of correct depth 65 + 5° noise), the rep is flagged
         # as var1 at rep close. Catches fast-ascent reps where EvidenceGate
         # may not confirm depth_tag in time.
-        "insuf_depth_threshold": 80,
+        "insuf_depth_threshold": 70,
         "insuf_depth_var":       "var1",
     },
     "lunges": {
@@ -1058,6 +1057,7 @@ def make_state(ex):
         "min_angle_this_rep":   999.0,
         "insuf_flex_this_rep":  False,
         "insuf_depth_threshold": ex.get("insuf_depth_threshold", None),
+        "insuf_depth_var":       ex.get("insuf_depth_var", "var3"),
         "dominant_foot":        None,   # set by PoseSession from user selection
         # Lunge internal debounce counters
         "lunge_down_frames":       0,
@@ -1152,10 +1152,14 @@ def update_reps(state, cls_key):
                 state["insuf_flex_this_rep"] = False
 
             # Squat: override "Insufficient Depth" (var1) if the knee actually
-            # reached ≤ 90° at any point during the rep (i.e. good depth was hit).
+            # reached ≤ 70° at any point during the rep. Threshold matches the
+            # safety net (correct upper bound 65 + 5° noise margin) so the
+            # 65-70° band is treated as borderline-correct, not var1.
+            # Needed because the buffer can contain var1 entries from depth_tag
+            # firing during the descent before reaching good depth.
             if (dominant == "var1"
                     and state.get("exercise_name") == "squats"
-                    and state.get("min_angle_this_rep", 999) <= 75):
+                    and state.get("min_angle_this_rep", 999) <= 70):
                 dominant = "correct"
 
             state["rep_log"].append(dominant)
