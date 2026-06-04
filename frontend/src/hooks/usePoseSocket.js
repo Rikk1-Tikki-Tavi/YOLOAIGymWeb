@@ -1,16 +1,25 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 
-const SEND_W = 640
-const SEND_H = 480
-const JPEG_Q = 0.65
-
-export function usePoseSocket({ exercise, videoRef, onData, enabled = true }) {
-  const wsRef          = useRef(null)
-  const captureRef     = useRef(null)
-  const responsePending = useRef(false)    // waiting for backend response
-  const captureInProgress = useRef(false)  // currently encoding / converting
-  const sendTimeRef    = useRef(0)
-  const rafRef         = useRef(null)
+/**
+ * usePoseSocket
+ * -------------
+ * Runs in-browser pose estimation (via detectPose from usePoseDetector) then
+ * sends the resulting 17 keypoints as JSON text to the backend WebSocket.
+ *
+ * This replaces the old approach of sending raw JPEG frames (~10 KB each) to
+ * the VPS for YOLO inference (100-300ms on CPU). By running pose estimation
+ * locally (~10-20ms on WebGL) the round-trip drops from 200-400ms to 15-50ms.
+ *
+ * Payload sent to backend:
+ *   { "keypoints": [[x,y,conf] × 17], "frame_size": [videoWidth, videoHeight] }
+ *   — ~500 bytes JSON text vs ~10 KB binary
+ */
+export function usePoseSocket({ exercise, dominantFoot, videoRef, detectPose, onData, onLocalKP, enabled = true }) {
+  const wsRef            = useRef(null)
+  const rafRef           = useRef(null)
+  const responsePending  = useRef(false)
+  const sendTimeRef      = useRef(0)
+  const kpSmoothRef      = useRef(null)   // EMA-smoothed keypoints for skeleton rendering
 
   const [connected,  setConnected]  = useState(false)
   const [latency,    setLatency]    = useState(0)
@@ -20,38 +29,26 @@ export function usePoseSocket({ exercise, videoRef, onData, enabled = true }) {
   const fpsCountRef = useRef(0)
   const fpsTimerRef = useRef(performance.now())
 
-  // Offscreen canvas
-  useEffect(() => {
-    const c = document.createElement('canvas')
-    c.width  = SEND_W
-    c.height = SEND_H
-    captureRef.current = c
-  }, [])
-
   // WebSocket lifecycle
   useEffect(() => {
     if (!exercise || !enabled) return
 
-    const ws = new WebSocket(`ws://localhost:8000/ws/${exercise}`)
-    ws.binaryType = 'arraybuffer'
+    const foot = dominantFoot ?? 'L'
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/${exercise}/${foot}`)
     wsRef.current = ws
 
     ws.onopen = () => {
       setConnected(true)
       responsePending.current = false
-      captureInProgress.current = false
     }
-
     ws.onclose = () => {
       setConnected(false)
       responsePending.current = false
-      captureInProgress.current = false
     }
-
     ws.onerror = (e) => console.error('[WS] error', e)
 
     ws.onmessage = (evt) => {
-      // Message received → response no longer pending
       const rtt = performance.now() - sendTimeRef.current
       setLatency(Math.round(rtt))
       responsePending.current = false
@@ -73,61 +70,61 @@ export function usePoseSocket({ exercise, videoRef, onData, enabled = true }) {
       }
     }
 
-    return () => {
-      ws.close()
-      wsRef.current = null
-      responsePending.current = false
-      captureInProgress.current = false
-    }
-  }, [exercise, enabled])
+    return () => { ws.close(); wsRef.current = null; responsePending.current = false }
+  }, [exercise, dominantFoot, enabled])
 
-  // Robust JPEG capture with single‑flight guarantee
-  const captureAndSend = useCallback(() => {
-    const ws      = wsRef.current
-    const video   = videoRef.current
-    const canvas  = captureRef.current
-
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-    if (responsePending.current || captureInProgress.current) return
+  // Main pose-detect-and-send loop
+  const runPoseAndSend = useCallback(async () => {
+    const video = videoRef.current
     if (!video || video.readyState < 2) return
-    if (!canvas) return
+    if (!detectPose) return
 
-    const ctx = canvas.getContext('2d', { willReadFrequently: false })
-    if (!ctx) return
+    // Always run pose detection regardless of backend state.
+    // This keeps the skeleton rendering at native MoveNet rate (~30-60fps)
+    // even when the backend hasn't responded yet (planks, slow connections).
+    const rawKP = await detectPose(video)
+    if (!rawKP) {
+      // No confident pose — clear stale skeleton and reset smoother so the
+      // next detection starts fresh (no blend with stale ghost positions).
+      kpSmoothRef.current = null
+      onLocalKP?.(null)
+      return
+    }
 
-    // Mirror
-    ctx.save()
-    ctx.translate(SEND_W, 0)
-    ctx.scale(-1, 1)
-    ctx.drawImage(video, 0, 0, SEND_W, SEND_H)
-    ctx.restore()
+    const vW = video.videoWidth
+    const vH = video.videoHeight
 
-    // Mark encoding in progress
-    captureInProgress.current = true
+    // Mirror x: the canvas draws the video flipped (selfie mode) so keypoints
+    // must be flipped too before sending to the backend and before rendering.
+    const mirroredKP = rawKP.map(([x, y, c]) => [vW - x, y, c])
 
-    canvas.toBlob((blob) => {
-      captureInProgress.current = false  // encoding done
+    // EMA-smooth keypoints for the skeleton display only.
+    // Alpha=0.65: responsive but stable enough to kill MoveNet noise jitter.
+    // Raw mirroredKP is sent to the backend so angle calculations stay accurate.
+    const ALPHA = 0.65
+    const prev  = kpSmoothRef.current
+    const smoothed = (prev && prev.length === mirroredKP.length)
+      ? mirroredKP.map(([x, y, c], i) => [
+          ALPHA * x + (1 - ALPHA) * prev[i][0],
+          ALPHA * y + (1 - ALPHA) * prev[i][1],
+          c,
+        ])
+      : mirroredKP
+    kpSmoothRef.current = smoothed
 
-      // If ws closed / a response is already pending, abort
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
-      if (responsePending.current) return
+    // Fire smoothed keypoints for 60fps skeleton rendering
+    onLocalKP?.(smoothed)
 
-      if (!blob) return
+    // Only send raw keypoints to backend when the previous response has been received.
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    if (responsePending.current) return
 
-      blob.arrayBuffer().then((buf) => {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
-        if (responsePending.current) return
-
-        // Both flags clear → we can send this frame
-        responsePending.current = true
-        sendTimeRef.current = performance.now()
-        wsRef.current.send(buf)
-      }).catch(() => {
-        // Conversion failed – reset flags
-        captureInProgress.current = false
-      })
-    }, 'image/jpeg', JPEG_Q)
-  }, [videoRef])
+    // Send keypoints JSON (~500 bytes) instead of a JPEG frame (~10 KB)
+    responsePending.current = true
+    sendTimeRef.current = performance.now()
+    ws.send(JSON.stringify({ keypoints: mirroredKP, frame_size: [vW, vH] }))
+  }, [videoRef, detectPose, onLocalKP])
 
   // RAF loop
   useEffect(() => {
@@ -135,7 +132,7 @@ export function usePoseSocket({ exercise, videoRef, onData, enabled = true }) {
     let active = true
     const loop = () => {
       if (!active) return
-      captureAndSend()
+      runPoseAndSend()
       rafRef.current = requestAnimationFrame(loop)
     }
     rafRef.current = requestAnimationFrame(loop)
@@ -143,7 +140,7 @@ export function usePoseSocket({ exercise, videoRef, onData, enabled = true }) {
       active = false
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
     }
-  }, [captureAndSend, enabled])
+  }, [runPoseAndSend, enabled])
 
   return { connected, latency, serverFps, timingMs }
 }

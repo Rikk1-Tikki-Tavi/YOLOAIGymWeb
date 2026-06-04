@@ -113,7 +113,7 @@ Navigate to **http://localhost:5173** in Chrome.
 
 - Select an exercise
 - Allow camera access when prompted
-- Wait 3 seconds for the countdown
+- Wait 7 seconds for the countdown
 - Start exercising — the skeleton and HUD appear in real-time
 
 ---

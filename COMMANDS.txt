@@ -26,3 +26,6 @@ Quick checks
 If port 8000 is already in use
 1) netstat -ano | findstr :8000
 2) taskkill /PID <PID> /F
+
+
+window.__DEBUG_ANGLES = true

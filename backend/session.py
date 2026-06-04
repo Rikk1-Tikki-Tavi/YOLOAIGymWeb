@@ -26,19 +26,8 @@ from aigym_core import (
     update_reps,
     update_plank,
     compute_score,
-    check_pushup,
-    check_squat,
-    check_lunge,
-    check_plank,
     _no_pose,
 )
-
-_CHECKERS = {
-    "pushups": check_pushup,
-    "squats":  check_squat,
-    "lunges":  check_lunge,
-    "planks":  check_plank,
-}
 
 
 class PoseSession:
@@ -47,22 +36,24 @@ class PoseSession:
     EvidenceGate, rep log, etc.
     """
 
-    def __init__(self, exercise: str) -> None:
+    def __init__(self, exercise: str, dominant_foot: str = "L") -> None:
         key = exercise.lower().strip()
-        if key not in _CHECKERS:
+        if key not in EXERCISES:
             raise ValueError(
                 f"Unknown exercise '{exercise}'. "
-                f"Valid: {list(_CHECKERS)}"
+                f"Valid: {list(EXERCISES)}"
             )
 
         self.exercise = key
         self.ex       = EXERCISES[key]
-        self.checker  = _CHECKERS[key]
+        self.checker  = self.ex["checker"]
         self.allowed  = EXERCISE_KP_MASK.get(key, set(range(17)))
 
         self.state = make_state(self.ex)
         self.state["exercise_name"] = key
         self.state["session_start"] = time.time()
+        if key == "lunges":
+            self.state["dominant_foot"] = dominant_foot if dominant_foot in ("L", "R") else "L"
 
         self.kp_buf = KeypointBuffer(
             buf      = self.ex.get("kp_buffer_size",  KP_BUFFER_SIZE),
@@ -193,6 +184,7 @@ class PoseSession:
             },
             "var_names":       ex.get("var_names", {}),
             "form_issues":     sorted(state.get("form_issues", set())),
+            "last_rep_cls":    state.get("last_rep_cls"),
         }
 
         return assessment_out, state_info

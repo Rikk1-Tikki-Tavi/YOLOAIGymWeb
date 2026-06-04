@@ -225,8 +225,7 @@ export function drawDebugBar(ctx, canvasW, canvasH, { latency, serverFps, timing
   const parts = [
     `RTT ${latency}ms`,
     `SRV ${serverFps}fps`,
-    timingMs ? `YOLO ${timingMs.yolo}ms` : '',
-    timingMs ? `TOT ${(timingMs.decode + timingMs.yolo + timingMs.logic).toFixed(0)}ms` : '',
+    timingMs ? `SRV ${timingMs.logic}ms` : '',
   ].filter(Boolean).join('   ')
   ctx.fillText(parts, 22, cy)
 

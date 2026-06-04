@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(& \"D:\\\\DOCUMENTS\\\\SGU DOCUMENTS\\\\Thesis\\\\aigym-web2\\\\backend\\\\venv\\\\Scripts\\\\pip.exe\" install scp --quiet)",
+      "PowerShell(& \"D:\\\\DOCUMENTS\\\\SGU DOCUMENTS\\\\Thesis\\\\aigym-web2\\\\backend\\\\venv\\\\Scripts\\\\python.exe\" -c \"from scp import SCPClient; print\\('scp OK'\\)\")"
+    ]
+  }
+}

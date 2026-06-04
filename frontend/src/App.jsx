@@ -6,7 +6,7 @@ const EXERCISES = [
     key:   'pushups',
     label: 'Push-ups',
     icon:  '💪',
-    desc:  'Hip alignment · Elbow depth',
+    desc:  'Hip sagging · Hip piking · Elbow depth',
   },
   {
     key:   'squats',
@@ -18,13 +18,13 @@ const EXERCISES = [
     key:   'lunges',
     label: 'Lunges',
     icon:  '🏃',
-    desc:  'Knee overextension · Rear depth',
+    desc:  'Knee overextension · Wide step · Torso lean',
   },
   {
     key:   'planks',
     label: 'Planks',
     icon:  '⚡',
-    desc:  'Hip alignment · Head position',
+    desc:  'Hip sagging · Hip elevation',
   },
 ]
 
@@ -67,7 +67,7 @@ export default function App() {
       </main>
 
       <footer style={s.footer}>
-        <span style={s.footNote}>POWERED BY YOLO11 · FASTAPI · REACT</span>
+        <span style={s.footNote}>POWERED BY MOVENET · FASTAPI · REACT</span>
       </footer>
     </div>
   )
