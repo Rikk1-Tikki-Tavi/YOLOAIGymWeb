@@ -15,6 +15,8 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 export function usePoseDetector() {
   const detectorRef = useRef(null)
   const [isReady, setIsReady] = useState(false)
+  const [rejectionCount, setRejectionCount] = useState(0)
+  const resetRejectionCount = useCallback(() => setRejectionCount(0), [])
 
   useEffect(() => {
     let cancelled = false
@@ -63,21 +65,31 @@ export function usePoseDetector() {
    * Returns null if model isn't ready or no pose is found.
    */
   const detectPose = useCallback(async (videoEl) => {
-    if (!detectorRef.current || !videoEl || videoEl.readyState < 2) return null
+  if (!detectorRef.current || !videoEl || videoEl.readyState < 2) return null
 
-    const poses = await detectorRef.current.estimatePoses(videoEl)
-    if (!poses.length) return null
+  const poses = await detectorRef.current.estimatePoses(videoEl)
+  
+  // Case 1: No person detected
+  if (!poses.length) {
+    console.warn('[PoseDetector] No person detected');
+    setRejectionCount(prev => prev + 1);
+    return null;
+  }
 
-    // Gate on per-joint torso confidence (shoulders + hips).
-    // Using a minimum (not average): if ANY torso joint is uncertain the whole
-    // pose is unreliable. Average lets a strong shoulder compensate for a
-    // missing hip, which causes jitter when only half the body is in frame.
-    const KEY_IDXS  = [5, 6, 11, 12]   // L/R shoulder, L/R hip
-    const keyScores = KEY_IDXS.map(i => poses[0].keypoints[i]?.score ?? 0)
-    if (keyScores.some(s => s < 0.35)) return null
+  // Gate on per-joint torso confidence (shoulders + hips).
+  const KEY_IDXS = [5, 6, 11, 12]
+  const keyScores = KEY_IDXS.map(i => poses[0].keypoints[i]?.score ?? 0)
+  
+  // Case 2: Low confidence (torso joints below threshold)
+  if (keyScores.some(s => s < 0.35)) {
+    console.warn('[PoseDetector] Low confidence — rejected');
+    setRejectionCount(prev => prev + 1);
+    return null;
+  }
 
-    return poses[0].keypoints.map(kp => [kp.x, kp.y, kp.score ?? 0])
-  }, [])
+  // Success: return keypoints
+  return poses[0].keypoints.map(kp => [kp.x, kp.y, kp.score ?? 0])
+}, [])
 
-  return { detectPose, isReady }
+  return { detectPose, isReady, rejectionCount, resetRejectionCount }
 }

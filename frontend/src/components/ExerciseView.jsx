@@ -59,7 +59,7 @@ export default function ExerciseView({ exercise, onBack }) {
   const streamRef       = useRef(null)
 
   // In-browser pose detector (TF.js MoveNet) — eliminates VPS YOLO round-trip
-  const { detectPose, isReady: modelReady } = usePoseDetector()
+  const { detectPose, isReady: modelReady, rejectionCount, resetRejectionCount } = usePoseDetector()
 
   // Local keypoints from MoveNet — updated every frame before the WS round-trip
   const localKPRef      = useRef(null)
@@ -674,24 +674,24 @@ const styles = {
     backdropFilter:'blur(2px)',
   },
   summaryCard: {
-    width:        420,
-    maxWidth:     '90vw',
+    width:        600,             // was 420 → bigger box
+    maxWidth:     '95vw',          // ensure it doesn't overflow on smaller screens
     background:   'rgba(12,18,26,0.95)',
     border:       '1px solid #1f2e44',
-    borderRadius: 10,
-    padding:      '18px 20px',
+    borderRadius: 12,              // slightly rounder
+    padding:      '24px 28px',     // more breathing room
     boxShadow:    '0 10px 40px rgba(0,0,0,0.4)',
   },
   summaryTitle: {
     fontFamily:    '"Exo 2", sans-serif',
     fontWeight:    800,
-    fontSize:      16,
+    fontSize:      30,
     letterSpacing: 3,
     color:         '#e8f4ff',
   },
   summarySubtitle: {
     fontFamily:    '"Share Tech Mono", monospace',
-    fontSize:      12,
+    fontSize:      25,
     color:         '#7f9ab3',
     marginTop:     4,
     marginBottom:  12,
@@ -708,17 +708,17 @@ const styles = {
   },
   summaryLabel: {
     fontFamily: '"Exo 2", sans-serif',
-    fontSize:   12,
+    fontSize:   25,
     color:      '#8ea6bf',
   },
   summaryValue: {
     fontFamily: '"Share Tech Mono", monospace',
-    fontSize:   13,
+    fontSize:   30,
     color:      '#e8f4ff',
   },
   summarySectionTitle: {
     fontFamily: '"Exo 2", sans-serif',
-    fontSize:   12,
+    fontSize:   25,
     fontWeight: 700,
     color:      '#c8d8e8',
     marginTop:  8,
@@ -888,7 +888,7 @@ const styles = {
   },
   summaryBadge: (grade) => ({
     fontFamily:    '"Share Tech Mono", monospace',
-    fontSize:      16,
+    fontSize:      25,
     fontWeight:    700,
     letterSpacing: 2,
     color:         grade === 'A' ? '#00e87a' : grade === 'B' ? '#3d9eff' : grade === 'C' ? '#f4c04d' : '#ff6b6b',
